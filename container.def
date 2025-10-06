@@ -1,0 +1,144 @@
+Bootstrap: docker
+From: ubuntu:20.04
+
+%labels
+    Maintainer "mbtmbtmbt@mbtmbtmbt.com"
+    Name "lightzero-ubuntu20.04-py38"
+    Description "Apptainer image for LightZero (MuZero/AlphaZero/MCTS toolkit)"
+    Version "0.2.3-autorom-flatdir"
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export PYTHONUNBUFFERED=1
+    export PIP_NO_CACHE_DIR=1
+    export LZ_HOME=/opendilab/LightZero
+    export PATH=/usr/local/bin:$PATH
+    # Point to the folder containing ROM .bin files (flat or ROM/ symlink)
+    export ALE_PY_ROM_DIR=/opt/atari-roms
+    export ALE_ROM_DIR=/opt/atari-roms
+    export ATARI_ROM_DIR=/opt/atari-roms
+    export OMP_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    echo "[apt] update + toolchain"
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl wget git unzip bzip2 tzdata locales \
+        build-essential gcc g++ make cmake ninja-build pkg-config patchelf \
+        python3.8 python3.8-dev python3-pip \
+        swig \
+        ffmpeg libglib2.0-0 libsm6 libxext6 libxrender1 \
+        libgl1-mesa-glx libegl1 libglu1-mesa \
+        libjpeg-turbo8 libpng16-16 libtiff5 zlib1g \
+        libxfixes3 libxi6 libxrandr2 libxcursor1 libxxf86vm1 libfontconfig1
+    rm -rf /var/lib/apt/lists/*
+
+    locale-gen en_US.UTF-8 || true
+    update-locale LANG=en_US.UTF-8 || true
+
+    ln -sf /usr/bin/python3.8 /usr/local/bin/python
+    ln -sf /usr/bin/pip3      /usr/local/bin/pip
+
+    echo "[pip] bootstrap"
+    python -m pip install --upgrade pip setuptools wheel
+
+    echo "[pip] common libs"
+    python -m pip install --no-cache-dir \
+        "numpy>=1.21,<2.0" cython numba \
+        "opencv-python-headless>=4.9,<5" "imageio[ffmpeg]" \
+        pyecharts transformers
+
+    # ----- Atari ROMs: download + robust check -----
+    mkdir -p /opt/atari-roms
+    chmod -R a+rX /opt/atari-roms || true
+
+    python -m pip install --no-cache-dir AutoROM
+    i=1
+    while [ $i -le 5 ]; do
+      echo "[atari] AutoROM attempt $i ..."
+      if AutoROM --accept-license --install-dir /opt/atari-roms; then
+        break
+      fi
+      i=$((i+1))
+      sleep $((i*5))
+    done
+
+    # If AutoROM used a flat dir (0.6.1 behavior), ensure ROM/ also resolves to it.
+    if [ ! -e /opt/atari-roms/ROM ]; then
+      (cd /opt/atari-roms && ln -s . ROM) || true
+    fi
+
+    # Hard check: pass if flat dir has .bin OR ROM/ has files.
+    if ! ls /opt/atari-roms/*.bin >/dev/null 2>&1 && ! ls /opt/atari-roms/ROM/* >/dev/null 2>&1; then
+      echo "[ERROR] ROM install failed: no files in /opt/atari-roms (or ROM/)."
+      exit 1
+    fi
+    chmod -R a+rX /opt/atari-roms
+    # ----- end ROM block -----
+
+    echo "[repo] clone LightZero"
+    mkdir -p /opendilab
+    cd /opendilab
+    git clone --depth=1 https://github.com/opendilab/LightZero.git
+    cd LightZero
+    if [ -f .gitmodules ]; then
+      git submodule update --init --recursive
+    fi
+
+    echo "[pip] install LightZero requirements if present"
+    for f in requirements-build.txt requirements.txt requirements-test.txt requirements-doc.txt; do
+      if [ -f "$f" ]; then
+        echo " - pip install -r $f"
+        python -m pip install --no-cache-dir -r "$f"
+      fi
+    done
+
+    echo "[pip] editable install LightZero"
+    python -m pip install --no-cache-dir -e .
+
+    echo "[post] done"
+
+%runscript
+    if [ $# -eq 0 ]; then
+        echo "[LightZero] Entering $LZ_HOME"
+        cd "$LZ_HOME" 2>/dev/null || true
+        exec /bin/bash
+    else
+        cd "$LZ_HOME" 2>/dev/null || true
+        exec "$@"
+    fi
+
+%test
+    python - <<'PY'
+import sys, os, glob
+print("Python:", sys.version)
+flat = glob.glob("/opt/atari-roms/*.bin")
+romd = glob.glob("/opt/atari-roms/ROM/*")
+print("ROM(flat) :", len(flat), " ROM(ROM/):", len(romd))
+assert flat or romd, "No ROMs found under /opt/atari-roms"
+try:
+    import cv2; print("OpenCV:", cv2.__version__)
+except Exception as e:
+    raise SystemExit(f"cv2 import failed: {e}")
+try:
+    import lzero; print("LightZero path:", os.path.dirname(lzero.__file__))
+except Exception as e:
+    raise SystemExit(f"LightZero import failed: {e}")
+PY
+
+%help
+    Build:
+      apptainer build container.sif container.def
+
+    Run (GPU):
+      apptainer run --nv container.sif
+      apptainer run --nv container.sif python -u zoo/atari/config/atari_muzero_config.py
+
+    Use your host repo (live edits, no rebuild):
+      apptainer exec --nv --bind /abs/path/LightZero:/opendilab/LightZero container.sif \
+        bash -lc 'cd "$LZ_HOME" && python -u zoo/atari/config/experiment_pong_muzero_config.py'
