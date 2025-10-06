@@ -31,4 +31,4 @@ CTR_LZ="/opendilab/LightZero"
 echo "[RUN] bind $HOST_LZ -> $CTR_LZ"
 echo "[RUN] cmd : $CMD"
 apptainer exec $GPU_FLAG --bind "$HOST_LZ":"$CTR_LZ" "$SIF" \
-  bash -lc 'cd "$LZ_HOME" && python -m pip install -e . --no-build-isolation && '"$CMD"
+  bash -lc 'export PYTHONPATH="$LZ_HOME:$PYTHONPATH"; cd "$LZ_HOME"; '"$CMD"
