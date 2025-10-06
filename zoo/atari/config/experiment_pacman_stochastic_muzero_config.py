@@ -27,7 +27,7 @@ wandb.init = _patched_init
 
 env_id = 'MsPacmanNoFrameskip-v4'  # You can specify any Atari game here
 action_space_size = atari_env_action_space_map[env_id]
-chance_space_size = 4
+chance_space_size = 32
 
 # ==============================================================
 # begin of the most frequently changed config specified by the user
@@ -38,14 +38,14 @@ evaluator_env_num = 3
 num_simulations = 50
 update_per_collect = 1000
 batch_size = 64
-max_env_step = int(1e5)
+max_env_step = int(2e5)
 reanalyze_ratio = 0.1
 # ==============================================================
 # end of the most frequently changed config specified by the user
 # ==============================================================
 
 atari_stochastic_muzero_config = dict(
-    exp_name=f'data_stochastic_mz/{env_id[:-14]}_stochastic_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_chance{chance_space_size}_seed0',
+    exp_name=f'stochastic_mz/{env_id[:-14]}_stochastic_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_chance{chance_space_size}_seed0',
     env=dict(
         stop_value=int(1e6),
         env_id=env_id,

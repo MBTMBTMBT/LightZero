@@ -39,7 +39,7 @@ num_simulations = 50
 update_per_collect = 1000
 # replay_ratio = 0.25
 batch_size = 64
-max_env_step = int(1e5)
+max_env_step = int(2e5)
 reanalyze_ratio = 0.1
 
 # =========== for debug ===========
@@ -55,7 +55,7 @@ reanalyze_ratio = 0.1
 
 atari_muzero_config = dict(
     # exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}-rr{replay_ratio}_seed0',
-    exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0',
+    exp_name=f'muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0',
     env=dict(
         stop_value=int(1e6),
         env_id=env_id,
