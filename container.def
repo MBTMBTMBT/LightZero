@@ -18,8 +18,8 @@ From: ubuntu:20.04
     export ALE_PY_ROM_DIR=/opt/atari-roms
     export ALE_ROM_DIR=/opt/atari-roms
     export ATARI_ROM_DIR=/opt/atari-roms
-    export OMP_NUM_THREADS=1
-    export MKL_NUM_THREADS=1
+    # export OMP_NUM_THREADS=1
+    # export MKL_NUM_THREADS=1
 
 %post
     set -eu
