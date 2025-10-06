@@ -1,9 +1,32 @@
 from easydict import EasyDict
 from zoo.atari.config.atari_env_action_space_map import atari_env_action_space_map
+import wandb
+
+
+_OVERRIDE_PROJECT = "MsPacmanNoFrameskip-v4"
+_USE_CFG_EXP_NAME = True
+
+_real_init = wandb.init
+def _patched_init(*args, **kwargs):
+    # 1) project
+    if _OVERRIDE_PROJECT:
+        kwargs["project"] = _OVERRIDE_PROJECT
+
+    # 2) name
+    if "name" not in kwargs or kwargs["name"] is None:
+        run_name = None
+        if _USE_CFG_EXP_NAME and "config" in kwargs and kwargs["config"] is not None:
+            cfg = kwargs["config"]
+            run_name = getattr(cfg, "exp_name", None) or (cfg.get("exp_name") if hasattr(cfg, "get") else None)
+        kwargs["name"] = run_name
+
+    return _real_init(*args, **kwargs)
+
+wandb.init = _patched_init
 
 
 norm_type = 'BN'
-env_id = 'PongNoFrameskip-v4'  # You can specify any Atari game here
+env_id = 'MsPacmanNoFrameskip-v4'  # You can specify any Atari game here
 action_space_size = atari_env_action_space_map[env_id]
 
 # ==============================================================
@@ -13,9 +36,9 @@ collector_env_num = 8
 n_episode = 8
 evaluator_env_num = 3
 num_simulations = 50
-update_per_collect = None
-replay_ratio = 0.25
-batch_size = 256
+update_per_collect = 1000
+# replay_ratio = 0.25
+batch_size = 64
 max_env_step = int(1e5)
 reanalyze_ratio = 0.1
 
@@ -31,7 +54,8 @@ reanalyze_ratio = 0.1
 # ==============================================================
 
 atari_muzero_config = dict(
-    exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}-rr{replay_ratio}_seed0',
+    # exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}-rr{replay_ratio}_seed0',
+    exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0',
     env=dict(
         stop_value=int(1e6),
         env_id=env_id,
@@ -68,7 +92,7 @@ atari_muzero_config = dict(
         random_collect_episode_num=0,
         use_augmentation=True,
         use_priority=False,
-        replay_ratio=replay_ratio,
+        # replay_ratio=replay_ratio,
         update_per_collect=update_per_collect,
         batch_size=batch_size,
         optim_type='SGD',
@@ -83,6 +107,7 @@ atari_muzero_config = dict(
         replay_buffer_size=int(1e6),
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
+        use_wandb=True,
     ),
 )
 atari_muzero_config = EasyDict(atari_muzero_config)

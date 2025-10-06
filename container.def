@@ -51,7 +51,7 @@ From: ubuntu:20.04
     python -m pip install --no-cache-dir \
         "numpy>=1.21,<2.0" cython numba \
         "opencv-python-headless>=4.9,<5" "imageio[ffmpeg]" \
-        pyecharts transformers
+        pyecharts transformers wandb
 
     # ----- Atari ROMs: download + robust check -----
     mkdir -p /opt/atari-roms
