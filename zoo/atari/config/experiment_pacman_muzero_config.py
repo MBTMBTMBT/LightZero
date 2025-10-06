@@ -2,79 +2,55 @@ from easydict import EasyDict
 from zoo.atari.config.atari_env_action_space_map import atari_env_action_space_map
 import wandb
 
-
 _OVERRIDE_PROJECT = "MsPacmanNoFrameskip-v4"
 _USE_CFG_EXP_NAME = True
 
 _real_init = wandb.init
 def _patched_init(*args, **kwargs):
-    # 1) project
     if _OVERRIDE_PROJECT:
         kwargs["project"] = _OVERRIDE_PROJECT
-
-    # 2) name
     if "name" not in kwargs or kwargs["name"] is None:
         run_name = None
         if _USE_CFG_EXP_NAME and "config" in kwargs and kwargs["config"] is not None:
             cfg = kwargs["config"]
             run_name = getattr(cfg, "exp_name", None) or (cfg.get("exp_name") if hasattr(cfg, "get") else None)
         kwargs["name"] = run_name
-
     return _real_init(*args, **kwargs)
-
 wandb.init = _patched_init
 
-
-norm_type = 'BN'
-env_id = 'MsPacmanNoFrameskip-v4'  # You can specify any Atari game here
+env_id = 'MsPacmanNoFrameskip-v4'
 action_space_size = atari_env_action_space_map[env_id]
 
-# ==============================================================
-# begin of the most frequently changed config specified by the user
-# ==============================================================
+# ---- aligned knobs (mirror stochastic) ----
 collector_env_num = 8
 n_episode = 8
 evaluator_env_num = 3
-num_simulations = 50
-update_per_collect = 1000
-# replay_ratio = 0.25
-batch_size = 64
+num_simulations = 32
+batch_size = 256
 max_env_step = int(2e5)
 reanalyze_ratio = 0.1
-
-# =========== for debug ===========
-# collector_env_num = 2
-# n_episode = 2
-# evaluator_env_num = 2
-# num_simulations = 2
-# update_per_collect = 2
-# batch_size = 2
-# ==============================================================
-# end of the most frequently changed config specified by the user
-# ==============================================================
+replay_ratio = 0.25
+update_per_collect = None
+# -------------------------------------------
 
 atari_muzero_config = dict(
-    # exp_name=f'data_muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}-rr{replay_ratio}_seed0',
-    exp_name=f'muzero/{env_id[:-14]}_atari_stack4_muzero_ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0',
+    exp_name=f'muzero/MsPacman_v4_muzero_ns{num_simulations}_rr{replay_ratio}_re{reanalyze_ratio}_seed0',
     env=dict(
         stop_value=int(1e6),
         env_id=env_id,
-        observation_shape=(4, 64, 64),
+        observation_shape=(4, 84, 84),
         frame_stack_num=4,
         gray_scale=True,
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
         n_evaluator_episode=evaluator_env_num,
-        manager=dict(shared_memory=False, ),
-        # TODO: debug
-        # collect_max_episode_steps=int(50),
-        # eval_max_episode_steps=int(50),
+        manager=dict(shared_memory=False),
     ),
     policy=dict(
         analysis_sim_norm=False,
         cal_dormant_ratio=False,
         model=dict(
-            observation_shape=(4, 64, 64),
+            observation_shape=(4, 84, 84),
             frame_stack_num=4,
             image_channel=1,
             gray_scale=True,
@@ -92,12 +68,12 @@ atari_muzero_config = dict(
         random_collect_episode_num=0,
         use_augmentation=True,
         use_priority=False,
-        # replay_ratio=replay_ratio,
         update_per_collect=update_per_collect,
+        replay_ratio=replay_ratio,
         batch_size=batch_size,
-        optim_type='SGD',
-        piecewise_decay_lr_scheduler=True,
-        learning_rate=0.2,
+        optim_type='Adam',
+        piecewise_decay_lr_scheduler=False,
+        learning_rate=3e-3,
         target_update_freq=100,
         num_simulations=num_simulations,
         reanalyze_ratio=reanalyze_ratio,
@@ -110,10 +86,9 @@ atari_muzero_config = dict(
         use_wandb=True,
     ),
 )
-atari_muzero_config = EasyDict(atari_muzero_config)
-main_config = atari_muzero_config
+main_config = EasyDict(atari_muzero_config)
 
-atari_muzero_create_config = dict(
+create_config = EasyDict(dict(
     env=dict(
         type='atari_lightzero',
         import_names=['zoo.atari.envs.atari_lightzero_env'],
@@ -123,9 +98,7 @@ atari_muzero_create_config = dict(
         type='muzero',
         import_names=['lzero.policy.muzero'],
     ),
-)
-atari_muzero_create_config = EasyDict(atari_muzero_create_config)
-create_config = atari_muzero_create_config
+))
 
 if __name__ == "__main__":
     from lzero.entry import train_muzero
