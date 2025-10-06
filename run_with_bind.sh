@@ -13,6 +13,16 @@ SIF="${2:?Usage: run_with_bind.sh /abs/path/to/LightZero ./container.sif [--nv] 
 NV_FLAG="${3:-}"
 CMD="${4:-}"
 
+# --- only change: normalize GPU flag ---
+GPU_FLAG=""
+case "${NV_FLAG}" in
+  --nvccli|nvccli) GPU_FLAG="--nvccli" ;;
+  --nv|nv)         GPU_FLAG="--nv" ;;
+  "" )             GPU_FLAG="" ;;
+  * )              GPU_FLAG="${NV_FLAG}" ;;  # passthrough unknown flags unchanged
+esac
+# --- end change ---
+
 CTR_LZ="/opendilab/LightZero"
 [[ -d "$HOST_LZ" ]] || { echo "ERROR: host repo not found: $HOST_LZ"; exit 1; }
 [[ -f "$SIF" ]] || { echo "ERROR: SIF not found: $SIF"; exit 1; }
@@ -20,5 +30,5 @@ CTR_LZ="/opendilab/LightZero"
 
 echo "[RUN] bind $HOST_LZ -> $CTR_LZ"
 echo "[RUN] cmd : $CMD"
-apptainer exec $NV_FLAG --bind "$HOST_LZ":"$CTR_LZ" "$SIF" \
+apptainer exec $GPU_FLAG --bind "$HOST_LZ":"$CTR_LZ" "$SIF" \
   bash -lc 'cd "$LZ_HOME" && python -m pip install -e . --no-build-isolation && '"$CMD"
