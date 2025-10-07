@@ -2,22 +2,6 @@ from easydict import EasyDict
 from zoo.atari.config.atari_env_action_space_map import atari_env_action_space_map
 import wandb
 
-_OVERRIDE_PROJECT = "MsPacmanNoFrameskip-v4"
-_USE_CFG_EXP_NAME = True
-
-_real_init = wandb.init
-def _patched_init(*args, **kwargs):
-    if _OVERRIDE_PROJECT:
-        kwargs["project"] = _OVERRIDE_PROJECT
-    if "name" not in kwargs or kwargs["name"] is None:
-        run_name = None
-        if _USE_CFG_EXP_NAME and "config" in kwargs and kwargs["config"] is not None:
-            cfg = kwargs["config"]
-            run_name = getattr(cfg, "exp_name", None) or (cfg.get("exp_name") if hasattr(cfg, "get") else None)
-        kwargs["name"] = run_name
-    return _real_init(*args, **kwargs)
-wandb.init = _patched_init
-
 env_id = 'MsPacmanNoFrameskip-v4'
 action_space_size = atari_env_action_space_map[env_id]
 
@@ -72,7 +56,7 @@ atari_stochastic_muzero_config = dict(
         batch_size=batch_size,
         optim_type='Adam',
         piecewise_decay_lr_scheduler=False,
-        learning_rate=3e-3,
+        learning_rate=1e-4,
         target_update_freq=100,
         num_simulations=num_simulations,
         reanalyze_ratio=reanalyze_ratio,
@@ -82,7 +66,7 @@ atari_stochastic_muzero_config = dict(
         replay_buffer_size=int(1e6),
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
-        use_wandb=True,
+        use_wandb=False,  # to avoid calling wandb from inside
     ),
 )
 main_config = EasyDict(atari_stochastic_muzero_config)
@@ -101,4 +85,16 @@ create_config = EasyDict(dict(
 
 if __name__ == "__main__":
     from lzero.entry import train_muzero
+
+    run = wandb.init(
+        project=env_id,
+        name=getattr(main_config, "exp_name", None),
+        config=main_config,
+        sync_tensorboard=True,
+        settings=wandb.Settings(console="redirect"),
+        monitor_gym=False,
+    )
+
     train_muzero([main_config, create_config], seed=0, model_path=main_config.policy.get('model_path'), max_env_step=max_env_step)
+
+    wandb.finish()
