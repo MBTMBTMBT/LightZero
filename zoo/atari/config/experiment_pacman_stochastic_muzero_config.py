@@ -39,7 +39,7 @@ atari_stochastic_muzero_config = dict(
     env=dict(
         stop_value=int(1e6),
         env_id=env_id,
-        observation_shape=(4, 84, 84),
+        observation_shape=(4, 96, 96),
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
         n_evaluator_episode=evaluator_env_num,
@@ -49,7 +49,7 @@ atari_stochastic_muzero_config = dict(
     ),
     policy=dict(
         model=dict(
-            observation_shape=(4, 84, 84),
+            observation_shape=(4, 96, 96),
             frame_stack_num=4,
             action_space_size=action_space_size,
             chance_space_size=chance_space_size,
