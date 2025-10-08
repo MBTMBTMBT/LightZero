@@ -87,6 +87,7 @@ main_cfg = EasyDict(dict(
         env_type="not_board_games",
         game_segment_length=game_segment_length,
         use_augmentation=True,
+        use_priority=False,
         update_per_collect=update_per_collect,
         replay_ratio=replay_ratio,
         batch_size=batch_size,
