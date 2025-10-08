@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_experiments.sh — dispatcher for ALE v5 experiments (MuZero / Stochastic MuZero)
+# run_experiments.sh — dispatcher for Atari experiments (MuZero / Stochastic MuZero)
 #
 # Run this **from the LightZero repo root**.
 #
@@ -134,7 +134,7 @@ case "${ENV_NAME}" in
   pacman)
     MUZERO_PY="zoo/atari/config/experiment_pacman_muzero_config.py"
     STOCH_PY="zoo/atari/config/experiment_pacman_stochastic_muzero_config.py"
-    ENV_SUBDIR="ms_pacman_v5"
+    ENV_SUBDIR="ms_pacman"
     ;;
   "" )
     echo "Error: --env is required (currently supported: pacman)"; exit 2 ;;
