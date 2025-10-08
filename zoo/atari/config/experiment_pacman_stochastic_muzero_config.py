@@ -32,7 +32,7 @@ evaluator_env_num = 10
 n_evaluator_episode = 20
 
 num_simulations = 50
-batch_size = 256
+batch_size = 64
 max_env_step = 400_000
 replay_ratio = 0.25
 target_update_freq = 100
@@ -48,7 +48,7 @@ obs_shape = (4, 96, 96)
 
 # --- wandb: external init (do not let LightZero init wandb) ---
 project_name = env_id
-exp_tag = f"stmz/pacman_seed{args.seed}"
+exp_tag = f"stmz/pacman_seed{args.seed}_batch64"
 exp_name = os.path.join(args.out_dir, exp_tag)
 
 main_cfg = EasyDict(dict(
