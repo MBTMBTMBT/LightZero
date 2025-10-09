@@ -84,6 +84,7 @@ ENV_NAME=""                 # required; e.g., pacman
 # Paths (to be set by --env)
 MUZERO_PY=""
 STOCH_PY=""
+DUAL_STOCH_PY=""
 ENV_SUBDIR=""
 
 # Output roots (updated per your request)
@@ -109,7 +110,7 @@ while [[ $# -gt 0 ]]; do
     --sif)              SIF="${2:-}"; shift ;;
     --nv)               GPU_FLAG="--nv" ;;
     --nvccli)           GPU_FLAG="--nvccli" ;;
-    --algo)             ALGO="${2:-}"; shift ;;              # all|muzero|stochastic
+    --algo)             ALGO="${2:-}"; shift ;;              # all|muzero|stochastic|dual_stochastic
     --seeds)            SEEDS_CSV="${2:-}"; shift ;;         # CSV list
     --num-seeds)        NUM_SEEDS="${2:-}"; shift ;;
     --outroot-local)    OUTROOT_LOCAL="${2:-}"; shift ;;
@@ -122,7 +123,7 @@ while [[ $# -gt 0 ]]; do
     --exclude)          SLURM_EXCLUDE="${2:-}"; shift ;;
     --slurm-stdout-dir) SLURM_STDOUT_DIR="${2:-}"; shift ;;
     -h|--help)
-      echo "Usage: $0 --env <name> [--nv|--nvccli] [--use-slurm] [--sif PATH] [--algo all|muzero|stochastic] [--seeds CSV|--num-seeds N]"
+      echo "Usage: $0 --env <name> [--nv|--nvccli] [--use-slurm] [--sif PATH] [--algo all|muzero|stochastic|dual_stochastic] [--seeds CSV|--num-seeds N]"
       exit 0;;
     *) echo "Unknown: $1"; exit 2 ;;
   esac
@@ -134,6 +135,7 @@ case "${ENV_NAME}" in
   pacman)
     MUZERO_PY="zoo/atari/config/experiment_pacman_muzero_config.py"
     STOCH_PY="zoo/atari/config/experiment_pacman_stochastic_muzero_config.py"
+    DUAL_STOCH_PY="zoo/atari/config/experiment_pacman_dual_stochastic_muzero_config.py"  # <-- added
     ENV_SUBDIR="ms_pacman"
     ;;
   "" )
@@ -162,8 +164,18 @@ case "${ALGO}" in
   all)        ALGOS=(muzero stochastic) ;;
   muzero)     ALGOS=(muzero) ;;
   stochastic) ALGOS=(stochastic) ;;
+  dual_stochastic) ALGOS=(dual_stochastic) ;;
   *) echo "Invalid --algo: ${ALGO}"; exit 2 ;;
 esac
+
+# Additional sanity only when dual_stochastic is requested
+need_dual=false
+for a in "${ALGOS[@]}"; do
+  if [[ "${a}" == "dual_stochastic" ]]; then need_dual=true; break; fi
+done
+if ${need_dual}; then
+  [[ -f "${DUAL_STOCH_PY}" ]] || { echo "Error: dual-stochastic config py not found for env '${ENV_NAME}'"; exit 2; }
+fi
 
 # Engine + paths
 if ${USE_SLURM}; then
@@ -214,8 +226,11 @@ if ! ${USE_SLURM}; then
     outdir="${EXP_OUTROOT%/}/${ENV_SUBDIR}/${a}/seed${s}"
     mkdir -p "${outdir}"
 
+    # --- select per-algo config ---
     if [[ "${a}" == "muzero" ]]; then
       PY_REL="${MUZERO_PY}"
+    elif [[ "${a}" == "dual_stochastic" ]]; then
+      PY_REL="${DUAL_STOCH_PY}"   # <-- added
     else
       PY_REL="${STOCH_PY}"
     fi
@@ -246,8 +261,11 @@ for ((i=0;i<${#JOBS_ALGO[@]};i++)); do
   outdir="${EXP_OUTROOT%/}/${ENV_SUBDIR}/${a}/seed${s}"
   mkdir -p "${outdir}"
 
+  # --- select per-algo config ---
   if [[ "${a}" == "muzero" ]]; then
     PY_REL="${MUZERO_PY}"
+  elif [[ "${a}" == "dual_stochastic" ]]; then
+    PY_REL="${DUAL_STOCH_PY}"   # <-- added
   else
     PY_REL="${STOCH_PY}"
   fi

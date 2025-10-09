@@ -48,9 +48,11 @@ def train_muzero(
     """
 
     cfg, create_cfg = input_cfg
-    assert create_cfg.policy.type in ['efficientzero', 'muzero', 'muzero_context', 'muzero_rnn_full_obs', 'sampled_efficientzero', 'sampled_muzero', 'gumbel_muzero', 'stochastic_muzero'], \
-        "train_muzero entry now only support the following algo.: 'efficientzero', 'muzero', 'sampled_efficientzero', 'gumbel_muzero', 'stochastic_muzero'"
+    assert create_cfg.policy.type in ['efficientzero', 'muzero', 'muzero_context', 'muzero_rnn_full_obs', 'sampled_efficientzero', 'sampled_muzero', 'gumbel_muzero', 'stochastic_muzero', 'stochastic_muzero_dual'], \
+        "train_muzero entry now only support the following algo.: 'efficientzero', 'muzero', 'sampled_efficientzero', 'gumbel_muzero', 'stochastic_muzero', 'stochastic_muzero_dual'"
 
+    # Determine buffer type and set dual buffer flag
+    use_dual_buffer = False
     if create_cfg.policy.type in ['muzero', 'muzero_context', 'muzero_rnn_full_obs']:
         from lzero.mcts import MuZeroGameBuffer as GameBuffer
     elif create_cfg.policy.type == 'efficientzero':
@@ -63,6 +65,10 @@ def train_muzero(
         from lzero.mcts import GumbelMuZeroGameBuffer as GameBuffer
     elif create_cfg.policy.type == 'stochastic_muzero':
         from lzero.mcts import StochasticMuZeroGameBuffer as GameBuffer
+    elif create_cfg.policy.type == 'stochastic_muzero_dual':
+        from lzero.mcts.buffer.game_buffer_dual_stochastic_muzero import DualStochasticMuZeroBuffer as GameBuffer
+        use_dual_buffer = True
+        create_cfg.policy.type = 'stochastic_muzero'  # Use same policy config
 
     if cfg.policy.cuda and torch.cuda.is_available():
         cfg.policy.device = 'cuda'
@@ -109,6 +115,14 @@ def train_muzero(
     batch_size = policy_config.batch_size
     # specific game buffer for MCTS+RL algorithms
     replay_buffer = GameBuffer(policy_config)
+
+    # Dual buffer specific setup
+    if use_dual_buffer:
+        replay_buffer.attach_predict_policy(policy)
+        replay_buffer.set_predict_mode(bool(getattr(policy_config, 'predict_full_mcts', True)))
+        replay_buffer.set_seed(cfg.seed)  # Set seed once for reproducible slicing
+
+    # Create collector and evaluator
     collector = Collector(
         env=collector_env,
         policy=policy.collect_mode,
@@ -197,7 +211,17 @@ def train_muzero(
 
         # Learn policy from collected data.
         for i in range(update_per_collect):
-            # Learner will train ``update_per_collect`` times in one iteration.
+            # Dual buffer: regenerate training view before sampling
+            if use_dual_buffer:
+                produced = replay_buffer.regen_train_view_from_base_sample(
+                    policy=policy,
+                    target_num_segments=batch_size,
+                    clear_train_first=True,
+                )
+                if produced < batch_size:
+                    logging.debug(f"[DualBuffer] produced {produced}/{batch_size} sub-segments")
+
+            # Sample training data
             if replay_buffer.get_num_of_transitions() > batch_size:
                 train_data = replay_buffer.sample(batch_size, policy)
             else:
