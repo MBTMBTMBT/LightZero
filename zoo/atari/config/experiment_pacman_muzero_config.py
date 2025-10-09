@@ -82,7 +82,7 @@ main_cfg = EasyDict(dict(
         ),
         cuda=True,
         gumbel_algo=False,
-        mcts_ctree=True,
+        # mcts_ctree=True,
         env_type="not_board_games",
         game_segment_length=game_segment_length,
         random_collect_episode_num=0,
