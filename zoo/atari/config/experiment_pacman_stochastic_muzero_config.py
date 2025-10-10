@@ -26,9 +26,9 @@ if action_space_size is None:
     finally:
         env.close()
 
-collector_env_num = 16
+collector_env_num = 8
 n_episode = 16
-evaluator_env_num = 10
+evaluator_env_num = 5
 n_evaluator_episode = 20
 
 num_simulations = 50
@@ -61,6 +61,7 @@ main_cfg = EasyDict(dict(
         evaluator_env_num=evaluator_env_num,
         n_evaluator_episode=n_evaluator_episode,
         manager=dict(shared_memory=False),
+        auto_reset=True,
         frame_stack_num=4,
         gray_scale=True,
         manually_discretization=False,

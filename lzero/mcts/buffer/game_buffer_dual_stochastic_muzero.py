@@ -70,15 +70,37 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
                 super()._push_game_segment(seg, dict(m) if m is not None else {})
 
     def _push_to_base(self, segment: Any, meta: Dict[str, Any]) -> None:
-        """Append a base segment and initialize per-step priorities."""
+        """Append base segment and initialize per-step priorities."""
         self.base_segment_buffer.append(segment)
         self.base_meta_buffer.append(dict(meta) if meta else {})
         L = len(segment)
+
+        # Handle priorities - follow parent class logic
         pri = None
         if meta and 'priorities' in meta:
-            pri = np.asarray(meta['priorities'], dtype=np.float32)
-        if pri is None or len(pri) != L:
+            pri_meta = meta['priorities']
+
+            # Handle None case first
+            if pri_meta is None:
+                # Use parent's logic: if no priorities provided, use max priority from existing data
+                if self.base_pos_priorities:
+                    max_prio = max(np.max(arr) for arr in self.base_pos_priorities if len(arr) > 0)
+                else:
+                    max_prio = 1.0
+                pri = np.full((L,), max_prio, dtype=np.float32)
+            # Handle scalar case
+            elif not hasattr(pri_meta, '__len__') or isinstance(pri_meta, (str, bytes)):
+                pri = np.full((L,), float(pri_meta), dtype=np.float32)
+            # Handle array case
+            else:
+                pri = np.asarray(pri_meta, dtype=np.float32)
+
+        # If still no valid priority data, initialize with zeros
+        if pri is None or (hasattr(pri, '__len__') and len(pri) != L):
             pri = np.zeros((L,), dtype=np.float32)
+        elif not hasattr(pri, '__len__'):
+            pri = np.full((L,), float(pri), dtype=np.float32)
+
         self.base_pos_priorities.append(pri)
 
     # ---------------- Rebuild-on-demand (key API) ----------------
@@ -133,10 +155,15 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
                     sub_seg = self._slice_segment(seg, s, e)
                     sub_meta = self._derive_sub_meta(meta, base_id, s, e)
                 else:
+                    # piece is (sub_seg, sub_meta)
                     sub_seg, sub_meta = piece
-                    sub_meta.setdefault("base_id", base_id)
-                    sub_meta.setdefault("slice", None)
-                    sub_meta.setdefault("_offset0", 0)
+                    # --- ensure parent buffer-required fields exist ---
+                    if 'priorities' not in sub_meta:
+                        # length must match the sub-segment length
+                        sub_meta['priorities'] = np.zeros((len(sub_seg),), dtype=np.float32)
+                    sub_meta.setdefault('base_id', int(base_id))
+                    sub_meta.setdefault('slice', None)
+                    sub_meta.setdefault('_offset0', 0)
 
                 before = len(self.game_segment_buffer)
                 super()._push_game_segment(sub_seg, sub_meta)
@@ -178,88 +205,111 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
     def predict_state(self, segment: Any, pos: int) -> Dict[str, np.ndarray]:
         """
         Return per-action stats at (segment, pos).
-        When self.predict_full_mcts == False: run cheap initial_inference + softmax(logits).
-        When True: run a single-root MCTS with the SAME cfg as training (num_simulations, pb_c_*, root_*).
+        Lightweight: initial_inference + softmax(logits)
+        Full MCTS: complete tree search with same config as training.
         """
         assert self._predict_policy is not None, "Call attach_predict_policy(policy) first."
         model = self._predict_policy._target_model
         model.eval()
 
-        # 1) Build stacked observation for the root
+        # Build stacked observation for current position
         obs = segment.get_unroll_obs(pos, num_unroll_steps=1, padding=True)
         obs = obs[0:self._cfg.model.frame_stack_num]
         obs = prepare_observation([obs], self._cfg.model.model_type)
         obs_t = torch.from_numpy(obs).to(self._cfg.device)
 
-        # 2) Quick path (default): no tree search, just softmax over logits
+        # Quick path: logits -> softmax
+        self.predict_full_mcts = False
         if not self.predict_full_mcts:
             with torch.no_grad():
                 out = model.initial_inference(obs_t)
-                logits = out.policy_logits
-                logits = logits.detach().cpu().numpy()[0]
+                logits = out.policy_logits.detach().cpu().numpy()[0]
                 logits = logits - logits.max()
                 pi = np.exp(logits) / (np.exp(logits).sum() + 1e-8)
-            return {"policy": pi.astype(np.float32)}  # matches previous lightweight behavior
+            return {"policy": pi.astype(np.float32)}
 
-        # 3) Full MCTS path: reuse the SAME cfg fields as training search
+        # Full MCTS path
         with torch.no_grad():
-            # initial inference to get latent state, reward, policy logits for the root
             net_out = model.initial_inference(obs_t)
             latent_state_root = net_out.latent_state
             reward0 = getattr(net_out, 'reward', None)
-            if reward0 is None:
-                reward0 = torch.zeros(1, device=latent_state_root.device)
-            reward_val = float(torch.atleast_1d(reward0).detach().cpu().numpy().reshape(-1)[0])
-            policy_logits = net_out.policy_logits.detach().cpu().numpy()[0].tolist()
 
-        # 3.1 Build legal actions for the root (align with buffer._compute_target_policy_reanalyzed)
-        # Per-node action mask is T+1; take mask at the current node 'pos'
-        # If mask is missing, fall back to full discrete action set.
+            # Extract scalar reward safely
+            if reward0 is None:
+                reward_val = 0.0
+            elif isinstance(reward0, torch.Tensor):
+                reward_val = float(reward0.detach().cpu().numpy().reshape(-1)[0])
+            elif isinstance(reward0, (list, np.ndarray)):
+                reward_val = float(reward0[0]) if len(reward0) > 0 else 0.0
+            else:
+                reward_val = float(reward0) if isinstance(reward0, (int, float)) else 0.0
+
+            # Extract policy logits safely (list[float], length = action_space_size)
+            if hasattr(net_out.policy_logits, 'detach'):
+                policy_logits = net_out.policy_logits.detach().cpu().numpy()[0].tolist()
+            else:
+                arr = np.asarray(net_out.policy_logits)
+                policy_logits = arr[0].tolist() if arr.ndim > 1 else arr.tolist()
+
+            # Convert latent to numpy and DROP batch dim
+            # FIX: (1, C, H, W) -> (C, H, W) to match model.recurrent_inference's expected 4D after ctree batches it.
+            if isinstance(latent_state_root, torch.Tensor):
+                latent_state_np = latent_state_root.detach().cpu().numpy()
+            else:
+                latent_state_np = np.asarray(latent_state_root)
+            if latent_state_np.ndim >= 4 and latent_state_np.shape[0] == 1:
+                latent_state_np = latent_state_np[0]  # <-- FIX: remove batch dim
+
+        # Legal actions for root
         if hasattr(segment, 'action_mask_segment') and segment.action_mask_segment is not None:
             node_mask = segment.action_mask_segment[min(pos, len(segment.action_mask_segment) - 1)]
-            if node_mask is None:
-                legal_actions = list(range(self._cfg.model.action_space_size))
-            else:
-                legal_actions = [i for i, x in enumerate(node_mask) if int(x) == 1]
+            legal_actions = list(range(self._cfg.model.action_space_size)) if node_mask is None \
+                else [i for i, x in enumerate(node_mask) if int(x) == 1]
         else:
             legal_actions = list(range(self._cfg.model.action_space_size))
 
-        # to_play is used in board games; in non-board envs a dummy 0/1 works.
-        to_play = [0]  # keep list shape like training batch
+        # Single-player default
+        to_play = [0]
 
-        # 3.2 Prepare a single-root batch and run the SAME tree backend as training
-        if self.predict_use_ctree:
-            roots = MCTSCtree.roots(1, [legal_actions])
-        else:
-            roots = MCTSPtree.roots(1, [legal_actions])
+        # Build roots
+        roots = MCTSCtree.roots(1, [legal_actions]) if self.predict_use_ctree \
+            else MCTSPtree.roots(1, [legal_actions])
 
-        # Optionally add root Dirichlet noise (reuse training flag & alphas)
+        # Dirichlet noise (optional)
         if self.predict_reanalyze_noise:
             alpha = float(self._cfg.root_dirichlet_alpha)
             aw = float(self._cfg.root_noise_weight)
             noise = self._rng.dirichlet([alpha] * self._cfg.model.action_space_size).astype(np.float32).tolist()
-            # These 'prepare' helpers mirror the training code path inside LightZero buffer
             roots.prepare(aw, [noise], [reward_val], [policy_logits], to_play)
         else:
             roots.prepare_no_noise([reward_val], [policy_logits], to_play)
 
-        # Now run the same MCTS search as training; cfg (num_simulations, pb_c_*, etc.) is reused here
+        # Run search with a list of per-root latent states (one root here)
+        # Each element must be a single-root latent without batch dim.
         if self.predict_use_ctree:
-            MCTSCtree(self._cfg).search(roots, model, [latent_state_root], to_play)
+            MCTSCtree(self._cfg).search(roots, model, [latent_state_np], to_play)
         else:
-            MCTSPtree(self._cfg).search(roots, model, [latent_state_root], to_play)
+            MCTSPtree(self._cfg).search(roots, model, [latent_state_np], to_play)
 
-        # 3.3 Read back visit counts and searched root value, then normalize to a policy
-        dists = roots.get_distributions()  # list of lists (visit counts)
-        values = roots.get_values()  # list of floats
-        visits = np.asarray(dists[0], dtype=np.float32)
-        vsum = float(visits.sum()) if visits.size > 0 else 0.0
-        policy = (visits / (vsum + 1e-8)) if vsum > 0 else np.ones_like(visits) / max(1, len(visits))
+        # Collect results
+        dists = roots.get_distributions()
+        values = roots.get_values()
+
+        if dists and len(dists) > 0 and dists[0] is not None:
+            visits = np.asarray(dists[0], dtype=np.float32)
+            vsum = float(visits.sum()) if visits.size > 0 else 0.0
+            policy = visits / vsum if vsum > 0 else np.ones_like(visits) / max(1, len(visits))
+        else:
+            policy = np.ones(self._cfg.model.action_space_size, dtype=np.float32) / self._cfg.model.action_space_size
+            visits = np.ones(self._cfg.model.action_space_size, dtype=np.float32)
+
+        root_value = np.asarray([values[0]], dtype=np.float32) if values and len(values) > 0 \
+            else np.asarray([0.0], dtype=np.float32)
 
         return {
             "policy": policy.astype(np.float32),  # normalized visit distribution
-            "visit": visits,  # raw visit counts (optional)
-            "value": np.asarray([values[0]], dtype=np.float32),  # searched root value
+            "visit": visits,  # raw visit counts
+            "value": root_value,  # searched root value
         }
 
     def process_segment(
@@ -397,7 +447,24 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
 
     @staticmethod
     def _is_slice_tuple(x: Any) -> bool:
-        return isinstance(x, (tuple, list)) and len(x) == 2 and all(isinstance(t, int) for t in x)
+        """
+        Return True iff `x` looks like a slice tuple (start, end).
+
+        Accept both built-in ints and NumPy integer scalars
+        (e.g., numpy.int32/int64) so tuples produced by np.random.choice
+        are correctly recognized as (s, e) slices.
+        """
+        if not isinstance(x, (tuple, list)) or len(x) != 2:
+            return False
+        a, b = x
+
+        # bool is a subclass of int; exclude it explicitly.
+        import numpy as _np
+        def _is_int_like(v: Any) -> bool:
+            # Python int or NumPy integer scalar
+            return (isinstance(v, int) and not isinstance(v, bool)) or isinstance(v, _np.integer)
+
+        return _is_int_like(a) and _is_int_like(b)
 
     def _slice_segment(self, seg: Any, s: int, e: int):
         """
@@ -430,28 +497,47 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
         return sub
 
     def _derive_sub_meta(self, base_meta: Dict[str, Any], base_id: int, s: int, e: int) -> Dict[str, Any]:
-        """Build meta for sub-segment with base binding info."""
-        L = e - s
+        """
+        Build metadata for a sub-segment [s, e) derived from a base segment.
+
+        Guarantees:
+        - Always provides the 'priorities' key required by the parent buffer.
+        - Offsets are normalized to Python ints.
+        - Includes binding tags so train->base priority propagation works.
+        """
+        # Normalize to Python ints and compute slice length
+        s, e = int(s), int(e)
+        L = max(0, e - s)
         out: Dict[str, Any] = {}
 
-        # Copy priorities if available
-        pri_base = base_meta.get('priorities', None)
-        if pri_base is not None and len(pri_base) >= e:
-            out['priorities'] = np.asarray(pri_base[s:e], dtype=np.float32)
+        # ---- Priorities (ALWAYS present) ---------------------------------------
+        # Source from our base-level per-position priorities (exists for every base segment).
+        try:
+            base_pri = self.base_pos_priorities[base_id]
+            end_idx = min(e, len(base_pri))  # clamp to avoid OOB
+            pri_slice = np.asarray(base_pri[s:end_idx], dtype=np.float32)
+            # If something goes wrong (e.g., empty slice), fall back to zeros of length L.
+            if pri_slice.size != L:
+                pri_slice = np.zeros((L,), dtype=np.float32)
+        except Exception:
+            pri_slice = np.zeros((L,), dtype=np.float32)
+        out['priorities'] = pri_slice
 
-        # Calculate adjusted unroll steps
+        # ---- Unroll horizon relative to new origin -----------------------------
+        # Keep the same semantic as parent: cap by slice length and shift by 's'.
         orig_upt = int(base_meta.get('unroll_plus_td_steps', e))
         out['unroll_plus_td_steps'] = max(0, min(L, orig_upt - s))
 
-        # Set done flag if this is the end of original segment
-        out['done'] = bool(base_meta.get('done', False) and e == len(self.base_pos_priorities[base_id]))
+        # ---- Done flag (only if this slice reaches the end of the episode) -----
+        is_last_slice = (e == len(self.base_pos_priorities[base_id]))
+        out['done'] = bool(base_meta.get('done', False) and is_last_slice)
 
-        # Base binding info
-        out['base_id'] = base_id
+        # ---- Binding tags for priority back-propagation ------------------------
+        out['base_id'] = int(base_id)
         out['slice'] = (s, e)
         out['_offset0'] = s
 
-        # Copy creation time
+        # ---- Optional passthrough fields ---------------------------------------
         if 'make_time' in base_meta:
             out['make_time'] = base_meta['make_time']
 
@@ -460,7 +546,12 @@ class DualStochasticMuZeroBuffer(StochasticMuZeroGameBuffer):
     def _clear_train_view(self) -> None:
         """Clear only TRAIN view; BASE remains intact."""
         self.game_segment_buffer.clear()
-        self.game_pos_priorities.clear()
+        # Keep the same type the parent expects: a Python list.
+        if isinstance(self.game_pos_priorities, list):
+            self.game_pos_priorities.clear()
+        else:
+            # If some path made it a numpy array, normalize it back to list.
+            self.game_pos_priorities = []
         self.game_segment_game_pos_look_up.clear()
 
     def _priority_aware_segment_indices(self) -> List[int]:
