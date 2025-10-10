@@ -1,6 +1,7 @@
 # experiment_pacman_stochastic_muzero_config.py
 import re
-
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)
 from easydict import EasyDict
 import argparse, os
 import wandb
